@@ -133,27 +133,21 @@ def main():
     parser=argparse.ArgumentParser(description = "Grab Run Folder and FASTQ folders, perform md5sum and Fastqc", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     	
     	# Input parameters
-    	# Minimum Run ID, Project ID, ICA Config, ICA ApiKey
-    
-    	# parser.add_argument("--ica-path", dest="ica_path", required=False, help="ICA CLI exe path", default="~/bin/ica2")
-    	#parser.add_argument("--ica-path", dest="ica_path", required=False, help="ICA CLI exe path", default="opt/bin/linux/ica")
-    	# parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "~/.ica/apj-config.yaml")
-    	#parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "opt/resources/apj-config.yaml")
     parser.add_argument("--project-name", dest="project_name", required=True, help="ica project name specified in sample sheet that contains FASTQ files and new output folder", default ="japaninstrumenttest")
-    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather", default = "210910_VH00594_3_AAAGCV5HV")
+    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather")
     parser.add_argument("--api-key", dest="api_key", required=True, help="ICA API Key, surround with single quotes")
-    parser.add_argument("--ica-domain", dest="ica_domain", required=False, help="ICA domain", default = "ilmn-prod-apjdev")
-    parser.add_argument("--ica-server", dest="ica_server", required=False, help="ICA server", default = "https://aps2.platform.illumina.com")
+    parser.add_argument("--ica-domain", dest="ica_domain", required=False, help="ICA domain")
+    parser.add_argument("--ica-server", dest="ica_server", required=False, help="ICA server")
     parser.add_argument("--pgid", dest="pgid", required=True, help="PG ID for output folder" )
     parser.add_argument("--workgroup", dest="workgroup", required=True, help="Workgroup in BSSH")
     parser.add_argument("--runfastqc", dest="runfastqc", required=False, help="Specify 'true' or 'false' on whether to run fastqc",  
                         default='false', choices=['true','false'])
     # args = parser.parse_args(['--project-name','japaninstrumenttest',
-    #                     '--run-id','140910_M01704_0097',
-    #                     '--api-key','zJfoCvJXMEad20CAZuCS_',
+    #                     '--run-id','string',
+    #                     '--api-key','string',
     #                     '--pgid', 'PG0002-devtest',
-    # 						'--ica-server', 'https://apn1.platform.illumina.com',
-    # 						'--ica-domain', 'ilmn-prod-apjdev',
+    # 						'--ica-server', 'string',
+    # 						'--ica-domain', 'string',
     #                     '--workgroup', 'japaninstrumenttest'])
     args = parser.parse_args()
     today=datetime.today().strftime('%y%m%d')
