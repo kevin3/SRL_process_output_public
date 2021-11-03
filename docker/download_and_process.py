@@ -127,6 +127,15 @@ def run_md5sum(fastqfile):
     logging.info(f"md5sum calculation for {fastqfile} returned with exit code {response.returncode} with stderr: {response.stderr.decode('UTF-8')}")
     
     return response
+
+def parallel_process(i: dict, fastqfile: str, fastqc_flag: str):
+    download_file(i)
+    md5sum_response=run_md5sum(fastqfile)
+    if fastqc_flag =='true':
+        run_fastqc(fastqfile)
+    
+    return md5sum_response
+    
 #%%
 def main():
         #%%
@@ -134,21 +143,15 @@ def main():
     	
     	# Input parameters
     parser.add_argument("--project-name", dest="project_name", required=True, help="ica project name specified in sample sheet that contains FASTQ files and new output folder", default ="japaninstrumenttest")
-    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather")
+    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather", default = "210910_VH00594_3_AAAGCV5HV")
     parser.add_argument("--api-key", dest="api_key", required=True, help="ICA API Key, surround with single quotes")
-    parser.add_argument("--ica-domain", dest="ica_domain", required=False, help="ICA domain")
-    parser.add_argument("--ica-server", dest="ica_server", required=False, help="ICA server")
+    parser.add_argument("--ica-domain", dest="ica_domain", required=False, help="ICA domain", default = "ilmn-prod-apjdev")
+    parser.add_argument("--ica-server", dest="ica_server", required=False, help="ICA server", default = "https://aps2.platform.illumina.com")
     parser.add_argument("--pgid", dest="pgid", required=True, help="PG ID for output folder" )
     parser.add_argument("--workgroup", dest="workgroup", required=True, help="Workgroup in BSSH")
     parser.add_argument("--runfastqc", dest="runfastqc", required=False, help="Specify 'true' or 'false' on whether to run fastqc",  
                         default='false', choices=['true','false'])
-    # args = parser.parse_args(['--project-name','japaninstrumenttest',
-    #                     '--run-id','string',
-    #                     '--api-key','string',
-    #                     '--pgid', 'PG0002-devtest',
-    # 						'--ica-server', 'string',
-    # 						'--ica-domain', 'string',
-    #                     '--workgroup', 'japaninstrumenttest'])
+
     args = parser.parse_args()
     today=datetime.today().strftime('%y%m%d')
     #%% Add project cid to bssh volume acl so that run folder can be accessed from within project context
@@ -272,15 +275,10 @@ def main():
     os.makedirs('fastqc', exist_ok=True)
 
     pool=mp.Pool(mp.cpu_count())
-    fastqc_jobs=[]
-    md5sum_jobs=[]
-
+    job_list=[]
     for i in fastq_dict:
         if i['status'] == 'Available':
-            download_file(i)
-            if args.runfastqc == 'true':
-                fastqc_jobs.append(pool.apply_async(run_fastqc, (i['name'], )))
-            md5sum_jobs.append(pool.apply_async(run_md5sum, (i['name'], )))
+            job_list.append(pool.apply_async(parallel_process, (i, i['name'], args.runfastqc)))
         else:
             logging.warning(f"{i['name']} not downloaded. Status is {i['status']}")
         
@@ -288,9 +286,8 @@ def main():
     #%% Block until all async processes complete. Retrieve md5sum from completed background processes
     md5sumfilename=f"{args.pgid}_{today}_MD5.txt"
     with open(md5sumfilename, 'wt') as fh:
-        for i in range(len(fastqc_jobs)):
-            fastqc_jobs[i].get()
-            fh.write(md5sum_jobs[i].get().stdout.decode('UTF-8'))
+        for i in range(len(job_list)):
+            fh.write(job_list[i].get().stdout.decode('UTF-8'))
     
     logging.info(f"md5sum written to {md5sumfilename}")
     
@@ -361,8 +358,14 @@ def main():
     #Revert acl
     ICA_SDK.FoldersApi(api_client).update_folder(bsshvolume_id, body=ICA_SDK.FolderUpdateRequest(acl=old_acl))
     logging.info(f"{bsshvolume} folder acl reverted")
-
+    to_delete=glob("./*.fastq.gz")
+    for i in to_delete:
+        os.remove(i)
+        logging.info(f"Deleting {i} from current working directory")
+    
     logging.info("All complete!")
+    
+    #%% Remove fastq directory
 #%%
 if __name__ == "__main__":
 
