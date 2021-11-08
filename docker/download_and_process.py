@@ -104,6 +104,13 @@ def create_api_client(host, domain, x_api_key, cid=None):
     api_client = ICA_SDK.ApiClient(configuration)
     return api_client
 
+def filename(s, pgid, today, bclrunname, ext, uniquetsv):
+        if uniquetsv=='true':
+            filename=f'{pgid}_{today}_{bclrunname}_{s}.{ext}'
+            
+        else:
+            filename=f'{pgid}_{today}_{s}.{ext}'
+        return filename
 #%%
 def download_file(i : dict):
     cmd_args=['curl','-s', i['presigned_url'], '--output', i['name']]        
@@ -142,6 +149,12 @@ def main():
     parser=argparse.ArgumentParser(description = "Grab Run Folder and FASTQ folders, perform md5sum and Fastqc", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     	
     	# Input parameters
+    	# Minimum Run ID, Project ID, ICA Config, ICA ApiKey
+    
+    	# parser.add_argument("--ica-path", dest="ica_path", required=False, help="ICA CLI exe path", default="~/bin/ica2")
+    	#parser.add_argument("--ica-path", dest="ica_path", required=False, help="ICA CLI exe path", default="opt/bin/linux/ica")
+    	# parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "~/.ica/apj-config.yaml")
+    	#parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "opt/resources/apj-config.yaml")
     parser.add_argument("--project-name", dest="project_name", required=True, help="ica project name specified in sample sheet that contains FASTQ files and new output folder", default ="japaninstrumenttest")
     parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather", default = "210910_VH00594_3_AAAGCV5HV")
     parser.add_argument("--api-key", dest="api_key", required=True, help="ICA API Key, surround with single quotes")
@@ -151,7 +164,15 @@ def main():
     parser.add_argument("--workgroup", dest="workgroup", required=True, help="Workgroup in BSSH")
     parser.add_argument("--runfastqc", dest="runfastqc", required=False, help="Specify 'true' or 'false' on whether to run fastqc",  
                         default='false', choices=['true','false'])
-
+    parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
+                        default='false', choices=['true','false'])
+    # args = parser.parse_args(['--project-name','japaninstrumenttest',
+    #                     '--run-id','211105_M02021_0243',
+    #                     '--api-key','K9qVNH^a2*T6vfF^n%SvyC',
+    #                     '--pgid', 'PG1001',
+    # 						'--ica-server', 'https://apn1.platform.illumina.com',
+    # 						'--ica-domain', 'ilmn-prod-apjdev',
+    #                     '--workgroup', 'japaninstrumenttest'])
     args = parser.parse_args()
     today=datetime.today().strftime('%y%m%d')
     #%% Add project cid to bssh volume acl so that run folder can be accessed from within project context
@@ -229,20 +250,23 @@ def main():
                                                                              destination_folder_name='sequence'))
     logging.info('Fastq files copy initiated')
     #%% Copy run data to destination folder
-    #% Create destination folder
-    run_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/",
-                                    foldername='run_data',
-                                    volume_name=args.project_name,
-                                    api_client=api_client)
-
-    
+    #%%
     # List run folders
     runfolder_dict=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume], 
                                                 path=['/Runs/*'], 
                                                 recursive=False, page_size=10000).to_dict()['items']
     #Search for full run folder name
-    bclrun_name=search_name(runfolder_dict, args.run_id)
     
+    bclrun_name=search_name(runfolder_dict, args.run_id)
+    actual_bclrun_name=re.match('(.{6}_.{6}_.{4}_.{9})', bclrun_name).group(1)
+    
+    #%%
+    #% Create destination folder
+    run_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/run_data/",
+                                    foldername=actual_bclrun_name,
+                                    volume_name=args.project_name,
+                                    api_client=api_client)
+    #%%
     #Get id of InterOp folder
     interop_id=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume],
                                                            path=['/Runs/'+bclrun_name+'/InterOp/'], 
@@ -284,9 +308,10 @@ def main():
         
 
     #%% Block until all async processes complete. Retrieve md5sum from completed background processes
-    md5sumfilename=f"{args.pgid}_{today}_MD5.txt"
+    md5sumfilename=filename('MD5',args.pgid,today, actual_bclrun_name,'txt', args.uniquetsv)
     with open(md5sumfilename, 'wt') as fh:
         for i in range(len(job_list)):
+            #fastqc_jobs[i].get()
             fh.write(job_list[i].get().stdout.decode('UTF-8'))
     
     logging.info(f"md5sum written to {md5sumfilename}")
@@ -306,7 +331,30 @@ def main():
     ICA_SDK.FoldersApi(api_client).complete_folder_session(base_fol_response.id, 
                                           base_fol_response.object_store_access.session_id, 
                                           ICA_SDK.CompleteSessionRequest(1) )
-
+    #%% Upload meta.tsv
+    metafilename=filename('meta',args.pgid,today, actual_bclrun_name,'tsv', args.uniquetsv)
+    fastq_names=sorted([i['name'] for i in fastq_dict])
+    
+    sample_id=set()
+    with open(metafilename, 'wt') as fh:
+        fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
+        for i in fastq_names:
+            mg=re.match('(.{2}-.{2}-.{4}-.{1}-.{2}-.{1})-(.{9})_(.{6}_.{4}(.{4})_.{3})_S\d+_L00(\d)_(R1|R2)',i)
+            fh.write('\t'.join(mg.groups())+'\n')    
+            sample_id.add(mg.group(1))
+    upload_file(metafilename, base_fol_response)
+    
+    #%% Upload complete_list.tsv
+    completelistfilename=filename('complete_list',args.pgid,today, actual_bclrun_name,'tsv', args.uniquetsv)
+    sample_id_list=sorted(list(sample_id))
+    
+    with open(completelistfilename, 'wt') as fh:
+        fh.write('\t'.join(['id','sample_id','complete','folder_name\n']))
+        for i in sample_id_list:
+            
+            fh.write('\t'.join([i, i, 'Done',f'{today}_report'])+'\n')    
+    upload_file(completelistfilename, base_fol_response)
+            
     #%%Upload FastQC results
     #Create fastqc folder
     fastqc_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/",
