@@ -180,7 +180,7 @@ def main():
     
     today=datetime.today().strftime('%y%m%d')
     
-    p=urllib.parse.urlparse(ica_server, 'https')
+    p=urllib.parse.urlparse(args.ica_server, 'https')
     netloc=p.netloc or p.path
     newp=urllib.parse.ParseResult(scheme='https',netloc=netloc, path='', params='', query='',fragment='')
     args.ica_server=newp.geturl()
@@ -351,7 +351,7 @@ def main():
         fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
         for i in fastq_names:
             mg=re.match('(.{2}-.{2}-.{4}-.{1}-.{2}-.{1})-(.{9})_(.{6}_.{4}(.{4})_.{3})_S\d+_L00(\d)_(R1|R2)',i)
-            fh.write('\t'.join(mg.groups())+'\n')    
+            fh.write('\t'.join((i,)+mg.groups())+'\n')    
             sample_id.add(mg.group(1))
     upload_file(metafilename, base_fol_response)
     
