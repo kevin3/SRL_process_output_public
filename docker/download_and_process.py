@@ -15,6 +15,8 @@ from glob import glob
 from datetime import datetime
 import logging
 import sys
+import urllib
+
 logging.basicConfig(
 level=logging.INFO,
 format="%(asctime)s %(processName)s %(levelname)s %(message)s",
@@ -168,13 +170,22 @@ def main():
                         default='false', choices=['true','false'])
     # args = parser.parse_args(['--project-name','japaninstrumenttest',
     #                     '--run-id','211105_M02021_0243',
-    #                     '--api-key','',
+    #                     '--api-key','K9qVNH^a2*T6vfF^n%SvyC',
     #                     '--pgid', 'PG1001',
     # 						'--ica-server', 'https://apn1.platform.illumina.com',
     # 						'--ica-domain', 'ilmn-prod-apjdev',
     #                     '--workgroup', 'japaninstrumenttest'])
+    
     args = parser.parse_args()
+    
     today=datetime.today().strftime('%y%m%d')
+    
+    p=urllib.parse.urlparse(ica_server, 'https')
+    netloc=p.netloc or p.path
+    newp=urllib.parse.ParseResult(scheme='https',netloc=netloc, path='', params='', query='',fragment='')
+    args.ica_server=newp.geturl()
+    
+    logging.debug(str(args))
     #%% Add project cid to bssh volume acl so that run folder can be accessed from within project context
     #Generate api client in personal context
     api_client=create_api_client(host = args.ica_server,
@@ -183,11 +194,11 @@ def main():
 
     projects_dict = ICA_SDK.ProjectsApi(api_client).list_projects().to_dict()['items']
     cid=search_cid(projects_dict, args.project_name) #find cid of project
-    
     #Find bssh volume name based on workgroup name
     workgroups_dict = ICA_SDK.WorkgroupsApi(api_client).list_workgroups().to_dict()['items']
     wid=search_wid(workgroups_dict, args.workgroup)
     bsshvolume=f"bssh.{wid}"
+    logging.debug(f"{bsshvolume} folder acl updated")
     
     # Get bssh volume id
     api_response = ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume], path='/')
