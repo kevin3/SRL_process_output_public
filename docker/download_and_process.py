@@ -106,13 +106,10 @@ def create_api_client(host, domain, x_api_key, cid=None):
     api_client = ICA_SDK.ApiClient(configuration)
     return api_client
 
-def filename(s, pgid, today, bclrunname, ext, uniquetsv):
-        if uniquetsv=='true':
-            filename=f'{pgid}_{today}_{bclrunname}_{s}.{ext}'
-            
-        else:
-            filename=f'{pgid}_{today}_{s}.{ext}'
-        return filename
+def filename(s, pgid, today, bclrunname, ext):
+    filename=f'{pgid}_{today}_{bclrunname}_{s}.{ext}'
+
+    return filename
 #%%
 def download_file(i : dict):
     cmd_args=['curl','-s', i['presigned_url'], '--output', i['name']]        
@@ -158,7 +155,7 @@ def main():
     	# parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "~/.ica/apj-config.yaml")
     	#parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "opt/resources/apj-config.yaml")
     parser.add_argument("--project-name", dest="project_name", required=True, help="ica project name specified in sample sheet that contains FASTQ files and new output folder", default ="japaninstrumenttest")
-    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather", default = "210910_VH00594_3_AAAGCV5HV")
+    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather",  nargs='+')
     parser.add_argument("--api-key", dest="api_key", required=True, help="ICA API Key, surround with single quotes")
     parser.add_argument("--ica-domain", dest="ica_domain", required=False, help="ICA domain", default = "ilmn-prod-apjdev")
     parser.add_argument("--ica-server", dest="ica_server", required=False, help="ICA server", default = "https://aps2.platform.illumina.com")
@@ -166,8 +163,8 @@ def main():
     parser.add_argument("--workgroup", dest="workgroup", required=True, help="Workgroup in BSSH")
     parser.add_argument("--runfastqc", dest="runfastqc", required=False, help="Specify 'true' or 'false' on whether to run fastqc",  
                         default='false', choices=['true','false'])
-    parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
-                        default='false', choices=['true','false'])
+    # parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
+    #                     default='false', choices=['true','false'])
     # args = parser.parse_args(['--project-name','japaninstrumenttest',
     #                     '--run-id','211105_M02021_0243',
     #                     '--api-key','K9qVNH^a2*T6vfF^n%SvyC',
@@ -226,6 +223,12 @@ def main():
                               domain=args.ica_domain,
                               cid=cid,
                               x_api_key=args.api_key)
+    
+    #Create destination folder
+    base_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/",
+                  foldername=args.pgid,
+                  volume_name=args.project_name,
+                  api_client=api_client)
    
         
     #Find sample volume
@@ -237,74 +240,73 @@ def main():
                                                                    page_size=100, 
                                                                    recursive=False).to_dict()['items']
     
-    samplerun=search_name(folder_dict, args.run_id)
-    
-    #Get list of fastqs
-    fastq_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[samplevolume], 
-                                              path=[f'/runs/{samplerun}/*'], 
-                                              recursive=True, 
-                                              page_size=1000, 
-                                              include='PresignedUrl').to_dict()['items']
-    
-    #Create destination folder
-    base_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/",
-                  foldername=args.pgid,
-                  volume_name=args.project_name,
-                  api_client=api_client)
+    for run_id in args.run_id:
 
+        
+        samplerun=search_name(folder_dict, run_id)
+        
+        #Get list of fastqs
+        fastq_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[samplevolume], 
+                                                  path=[f'/runs/{samplerun}/*'], 
+                                                  recursive=True, 
+                                                  page_size=1000, 
+                                                  include='PresignedUrl').to_dict()['items']
+        
     
-    #Copy fastqs to destination folder
-    fastq_parent_folder_ids=set([i['parent_folder_id'] for i in fastq_dict])
-    for folder_id in fastq_parent_folder_ids:
-        ICA_SDK.FoldersApi(api_client).copy_folder(folder_id, 
-                                                   ICA_SDK.FolderCopyRequest(target_parent_folder_id=base_fol_response.id, 
-                                                                             destination_folder_name='sequence'))
-    logging.info('Fastq files copy initiated')
+    
+        
+        #Copy fastqs to destination folder
+        fastq_parent_folder_ids=set([i['parent_folder_id'] for i in fastq_dict])
+        for folder_id in fastq_parent_folder_ids:
+            ICA_SDK.FoldersApi(api_client).copy_folder(folder_id, 
+                                                       ICA_SDK.FolderCopyRequest(target_parent_folder_id=base_fol_response.id, 
+                                                                                 destination_folder_name='sequence'))
+        logging.info(f'Fastq files copy for {run_id} initiated')
     #%% Copy run data to destination folder
     #%%
-    # List run folders
+    # List run folders in bssh volume
     runfolder_dict=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume], 
                                                 path=['/Runs/*'], 
                                                 recursive=False, page_size=10000).to_dict()['items']
     #Search for full run folder name
+    for run_id in args.run_id:
+        bclrun_name=search_name(runfolder_dict, run_id)
+        actual_bclrun_name=re.match('(.{6}_.{6}_.{4}_.{9})', bclrun_name).group(1)
     
-    bclrun_name=search_name(runfolder_dict, args.run_id)
-    actual_bclrun_name=re.match('(.{6}_.{6}_.{4}_.{9})', bclrun_name).group(1)
+        #%%
+        #% Create destination folder
+        run_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/run_data/",
+                                        foldername=actual_bclrun_name,
+                                        volume_name=args.project_name,
+                                        api_client=api_client)
+        #%%
+        #Get id of InterOp folder
+        interop_id=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume],
+                                                               path=['/Runs/'+bclrun_name+'/InterOp/'], 
+                                                               recursive=True, page_size=10000).to_dict()['items'][0]['id']
     
-    #%%
-    #% Create destination folder
-    run_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/run_data/",
-                                    foldername=actual_bclrun_name,
-                                    volume_name=args.project_name,
-                                    api_client=api_client)
-    #%%
-    #Get id of InterOp folder
-    interop_id=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume],
-                                                           path=['/Runs/'+bclrun_name+'/InterOp/'], 
-                                                           recursive=True, page_size=10000).to_dict()['items'][0]['id']
-
-    #Copy to destination
-    ICA_SDK.FoldersApi(api_client).copy_folder(interop_id,
-                                               ICA_SDK.FolderCopyRequest(target_parent_folder_id=run_fol_response.id))
-    logging.info('InterOp folder copy initiated')
-    
-    #%% Copy individual sav files to destination
-    runfiles_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[bsshvolume], 
-                                              path=[f'/Runs/{bclrun_name}/*'], 
-                                              recursive=False, 
-                                              page_size=1000,
-                                              include='PresignedUrl').to_dict()['items']
-    
-    upload_count=0
-    for i in runfiles_dict:
-        if i['name'] in ['RunInfo.xml', 'RunParameters.xml', 'SampleSheet.csv']:
-            download_file(i)
-            upload_file(i['name'], run_fol_response)
-            upload_count+=1
-    #Close upload session
-    ICA_SDK.FoldersApi(api_client).complete_folder_session(run_fol_response.id, 
-                                      run_fol_response.object_store_access.session_id, 
-                                      ICA_SDK.CompleteSessionRequest(upload_count))
+        #Copy to destination
+        ICA_SDK.FoldersApi(api_client).copy_folder(interop_id,
+                                                   ICA_SDK.FolderCopyRequest(target_parent_folder_id=run_fol_response.id))
+        logging.info(f'InterOp folder copy for {run_id} initiated')
+        
+        #%% Copy individual sav files to destination
+        runfiles_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[bsshvolume], 
+                                                  path=[f'/Runs/{bclrun_name}/*'], 
+                                                  recursive=False, 
+                                                  page_size=1000,
+                                                  include='PresignedUrl').to_dict()['items']
+        
+        upload_count=0
+        for i in runfiles_dict:
+            if i['name'] in ['RunInfo.xml', 'RunParameters.xml', 'SampleSheet.csv']:
+                download_file(i)
+                upload_file(i['name'], run_fol_response)
+                upload_count+=1
+        #Close upload session
+        ICA_SDK.FoldersApi(api_client).complete_folder_session(run_fol_response.id, 
+                                          run_fol_response.object_store_access.session_id, 
+                                          ICA_SDK.CompleteSessionRequest(upload_count))
 
     #%% Download fastq and process in background
     os.makedirs('fastqc', exist_ok=True)
@@ -319,7 +321,7 @@ def main():
         
 
     #%% Block until all async processes complete. Retrieve md5sum from completed background processes
-    md5sumfilename=filename('MD5',args.pgid,today, actual_bclrun_name,'txt', args.uniquetsv)
+    md5sumfilename=filename('MD5',args.pgid,today, actual_bclrun_name,'txt')
     with open(md5sumfilename, 'wt') as fh:
         for i in range(len(job_list)):
             #fastqc_jobs[i].get()
@@ -343,7 +345,7 @@ def main():
                                           base_fol_response.object_store_access.session_id, 
                                           ICA_SDK.CompleteSessionRequest(1) )
     #%% Upload meta.tsv
-    metafilename=filename('meta',args.pgid,today, actual_bclrun_name,'tsv', args.uniquetsv)
+    metafilename=filename('meta',args.pgid,today, actual_bclrun_name,'tsv')
     fastq_names=sorted([i['name'] for i in fastq_dict])
     
     sample_id=set()
