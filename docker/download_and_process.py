@@ -166,15 +166,15 @@ def main():
     # parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
     #                     default='false', choices=['true','false'])
     # args = parser.parse_args(['--project-name','japaninstrumenttest',
-    #                     '--run-id','211105_M02021_0243',
-    #                     '--api-key','K9qVNH^a2*T6vfF^n%SvyC',
-    #                     '--pgid', 'PG1001',
+    #                     '--run-id','211105_M02021_0243_123456789', '211117_M02021_0245_123456789',
+    #                     '--api-key','7$dD5pkEgY1C5($$KcO__',
+    #                     '--pgid', 'PG3001',
     # 						'--ica-server', 'https://apn1.platform.illumina.com',
     # 						'--ica-domain', 'ilmn-prod-apjdev',
     #                     '--workgroup', 'japaninstrumenttest'])
     
     args = parser.parse_args()
-    
+    print(args.api_key)
     today=datetime.today().strftime('%y%m%d')
     
     p=urllib.parse.urlparse(args.ica_server, 'https')
@@ -183,7 +183,7 @@ def main():
     args.ica_server=newp.geturl()
     
     logging.debug(str(args))
-    #%% Add project cid to bssh volume acl so that run folder can be accessed from within project context
+    #% Add project cid to bssh volume acl so that run folder can be accessed from within project context
     #Generate api client in personal context
     api_client=create_api_client(host = args.ica_server,
                                  domain=args.ica_domain,
@@ -263,23 +263,23 @@ def main():
                                                                                  destination_folder_name='sequence'))
         logging.info(f'Fastq files copy for {run_id} initiated')
     #%% Copy run data to destination folder
-    #%%
+    #%
     # List run folders in bssh volume
     runfolder_dict=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume], 
                                                 path=['/Runs/*'], 
                                                 recursive=False, page_size=10000).to_dict()['items']
-    #Search for full run folder name
+    #Copy run folder in loop
     for run_id in args.run_id:
         bclrun_name=search_name(runfolder_dict, run_id)
-        actual_bclrun_name=re.match('(.{6}_.{6}_.{4}_.{9})', bclrun_name).group(1)
+        actual_bclrun_name=re.match('(.{6}_[a-zA-Z0-9]+_\d+_.{9})', bclrun_name).group(1)
     
-        #%%
+        #%
         #% Create destination folder
         run_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/run_data/",
                                         foldername=actual_bclrun_name,
                                         volume_name=args.project_name,
                                         api_client=api_client)
-        #%%
+        #%
         #Get id of InterOp folder
         interop_id=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume],
                                                                path=['/Runs/'+bclrun_name+'/InterOp/'], 
@@ -290,7 +290,7 @@ def main():
                                                    ICA_SDK.FolderCopyRequest(target_parent_folder_id=run_fol_response.id))
         logging.info(f'InterOp folder copy for {run_id} initiated')
         
-        #%% Copy individual sav files to destination
+        #% Copy individual sav files to destination
         runfiles_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[bsshvolume], 
                                                   path=[f'/Runs/{bclrun_name}/*'], 
                                                   recursive=False, 
@@ -310,65 +310,81 @@ def main():
 
     #%% Download fastq and process in background
     os.makedirs('fastqc', exist_ok=True)
-
     pool=mp.Pool(mp.cpu_count())
-    job_list=[]
-    for i in fastq_dict:
-        if i['status'] == 'Available':
-            job_list.append(pool.apply_async(parallel_process, (i, i['name'], args.runfastqc)))
-        else:
-            logging.warning(f"{i['name']} not downloaded. Status is {i['status']}")
+    #Download the process run id fastq in loop
+    for run_id in args.run_id:
+        
+        bclrun_name=search_name(runfolder_dict, run_id)
+        actual_bclrun_name=re.match('(.{6}_[a-zA-Z0-9]+_\d+_.{9})', bclrun_name).group(1)
+        
+        samplerun=search_name(folder_dict, run_id)
+        
+        #Get list of fastqs
+        fastq_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[samplevolume], 
+                                                  path=[f'/runs/{samplerun}/*'], 
+                                                  recursive=True, 
+                                                  page_size=1000, 
+                                                  include='PresignedUrl').to_dict()['items']
+        
+        job_list=[]
+        for i in fastq_dict:
+            if i['status'] == 'Available':
+                job_list.append(pool.apply_async(parallel_process, (i, i['name'], args.runfastqc)))
+            else:
+                logging.warning(f"{i['name']} not downloaded. Status is {i['status']}")
         
 
-    #%% Block until all async processes complete. Retrieve md5sum from completed background processes
-    md5sumfilename=filename('MD5',args.pgid,today, actual_bclrun_name,'txt')
-    with open(md5sumfilename, 'wt') as fh:
-        for i in range(len(job_list)):
-            #fastqc_jobs[i].get()
-            fh.write(job_list[i].get().stdout.decode('UTF-8'))
+        # Block until all async processes complete. Retrieve md5sum from completed background processes
+        md5sumfilename=filename('MD5',args.pgid,today, actual_bclrun_name,'txt')
+        with open(md5sumfilename, 'wt') as fh:
+            for i in range(len(job_list)):
+                #fastqc_jobs[i].get()
+                fh.write(job_list[i].get().stdout.decode('UTF-8'))
+        
+        logging.info(f"md5sum written to {md5sumfilename}")
+        
+
     
-    logging.info(f"md5sum written to {md5sumfilename}")
-    
+        # Upload md5sum
+        #Refresh upload credentials
+        base_fol_response = ICA_SDK.FoldersApi(api_client).update_folder(base_fol_response.id, 
+                                                                    include='ObjectStoreAccess', 
+                                                                    body=ICA_SDK.FolderUpdateRequest())
+        #Upload md5sum file
+        upload_file(md5sumfilename, base_fol_response)
+            
+        # Close upload session
+        ICA_SDK.FoldersApi(api_client).complete_folder_session(base_fol_response.id, 
+                                              base_fol_response.object_store_access.session_id, 
+                                              ICA_SDK.CompleteSessionRequest(1) )
+        # Upload meta.tsv
+        metafilename=filename('meta',args.pgid,today, actual_bclrun_name,'tsv')
+        fastq_names=sorted([i['name'] for i in fastq_dict])
+        
+        sample_id=set()
+        with open(metafilename, 'wt') as fh:
+            fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
+            for i in fastq_names:
+                mg=re.match('(.{2}-.{2}-.{4}-.{1}-.{2}-.{1})-(.{9})_(.{6}_.{4}(.{4})_.{3})_S\d+_L00(\d)_(R1|R2)',i)
+                fh.write('\t'.join((i,)+mg.groups())+'\n')    
+                sample_id.add(mg.group(1))
+        upload_file(metafilename, base_fol_response)
+        
+        # Upload complete_list.tsv
+        completelistfilename=filename('complete_list',args.pgid,today, actual_bclrun_name,'tsv')
+        sample_id_list=sorted(list(sample_id))
+        
+        with open(completelistfilename, 'wt') as fh:
+            fh.write('\t'.join(['id','sample_id','complete','folder_name\n']))
+            for i in sample_id_list:
+                
+                fh.write('\t'.join([i, i, 'Done',f'{today}_report'])+'\n')    
+        upload_file(completelistfilename, base_fol_response)
+        
     pool.close()
     pool.join()
-    
-    #%% Upload md5sum
-    #Refresh upload credentials
-    base_fol_response = ICA_SDK.FoldersApi(api_client).update_folder(base_fol_response.id, 
-                                                                include='ObjectStoreAccess', 
-                                                                body=ICA_SDK.FolderUpdateRequest())
-    #Upload md5sum file
-    upload_file(md5sumfilename, base_fol_response)
-        
-    # Close upload session
-    ICA_SDK.FoldersApi(api_client).complete_folder_session(base_fol_response.id, 
-                                          base_fol_response.object_store_access.session_id, 
-                                          ICA_SDK.CompleteSessionRequest(1) )
-    #%% Upload meta.tsv
-    metafilename=filename('meta',args.pgid,today, actual_bclrun_name,'tsv')
-    fastq_names=sorted([i['name'] for i in fastq_dict])
-    
-    sample_id=set()
-    with open(metafilename, 'wt') as fh:
-        fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
-        for i in fastq_names:
-            mg=re.match('(.{2}-.{2}-.{4}-.{1}-.{2}-.{1})-(.{9})_(.{6}_.{4}(.{4})_.{3})_S\d+_L00(\d)_(R1|R2)',i)
-            fh.write('\t'.join((i,)+mg.groups())+'\n')    
-            sample_id.add(mg.group(1))
-    upload_file(metafilename, base_fol_response)
-    
-    #%% Upload complete_list.tsv
-    completelistfilename=filename('complete_list',args.pgid,today, actual_bclrun_name,'tsv', args.uniquetsv)
-    sample_id_list=sorted(list(sample_id))
-    
-    with open(completelistfilename, 'wt') as fh:
-        fh.write('\t'.join(['id','sample_id','complete','folder_name\n']))
-        for i in sample_id_list:
-            
-            fh.write('\t'.join([i, i, 'Done',f'{today}_report'])+'\n')    
-    upload_file(completelistfilename, base_fol_response)
-            
-    #%%Upload FastQC results
+                
+    #%% Upload FastQC results
     #Create fastqc folder
     fastqc_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/{args.pgid}/",
                   foldername='FastQC',
@@ -411,7 +427,7 @@ def main():
     ICA_SDK.FoldersApi(api_client).complete_folder_session(parent_fol_response.id, 
                                           parent_fol_response.object_store_access.session_id, 
                                           ICA_SDK.CompleteSessionRequest(1) )
-    #%% Remove project cid from bssh volume acl
+    #% Remove project cid from bssh volume acl
     #Generate api client in personal context again
     api_client=create_api_client(host = args.ica_server,
                                  domain=args.ica_domain,
