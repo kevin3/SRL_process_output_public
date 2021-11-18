@@ -108,8 +108,8 @@ def create_api_client(host, domain, x_api_key, cid=None):
     api_client = ICA_SDK.ApiClient(configuration)
     return api_client
 
-def filename(s, pgid, today, bclrunname, ext):
-    filename=f'{pgid}_{today}_{bclrunname}_{s}.{ext}'
+def filename(s, pgid, today, ext):
+    filename=f'{pgid}_{today}_{s}.{ext}'
 
     return filename
 #%%
@@ -166,17 +166,17 @@ def main():
     parser.add_argument("--workgroup", dest="workgroup", required=True, help="Workgroup in BSSH")
     parser.add_argument("--runfastqc", dest="runfastqc", required=False, help="Specify 'true' or 'false' on whether to run fastqc",  
                         default='false', choices=['true','false'])
-    parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
-                        default='true', choices=['true','false'])
-    args = parser.parse_args(['--project-name','japaninstrumenttest',
-                        '--run-id','211105_M02021_0243_123456789, 211117_M02021_0245_123456789',
-                        '--api-key','cWdeSSBqrbmS*URdS$Bt6R',
-                        '--pgid', 'PG3003',
-    						'--ica-server', 'https://apn1.platform.illumina.com',
-    						'--ica-domain', 'ilmn-prod-apjdev',
-                        '--workgroup', 'japaninstrumenttest'])
+    # parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
+    #                     default='true', choices=['true','false'])
+    # args = parser.parse_args(['--project-name','japaninstrumenttest',
+    #                     '--run-id','211105_M02021_0243_123456789, 211117_M02021_0245_123456789',
+    #                     '--api-key','cWdeSSBqrbmS*URdS$Bt6R',
+    #                     '--pgid', 'PG3004',
+    # 						'--ica-server', 'https://apn1.platform.illumina.com',
+    # 						'--ica-domain', 'ilmn-prod-apjdev',
+    #                     '--workgroup', 'japaninstrumenttest'])
     
-    #args = parser.parse_args()
+    args = parser.parse_args()
     args.run_id=args.run_id.split(',')
     #Remove any trailing or leading whitespaces
     for i in range(len(args.run_id)):
@@ -332,6 +332,17 @@ def main():
     #%% Download fastq and process in background
     os.makedirs('fastqc', exist_ok=True)
     pool=mp.Pool(mp.cpu_count())
+    
+    #Write headers to files
+    metafilename=filename('meta',args.pgid,today, 'tsv')
+    with open(metafilename, 'wt') as fh:
+        fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
+    
+    completelistfilename=filename('complete_list',args.pgid,today, 'tsv')
+    with open(completelistfilename, 'wt') as fh:
+        fh.write('\t'.join(['id','sample_id','complete','folder_name\n']))
+        
+        
     #Download the process run id fastq in loop
     for run_id in args.run_id:
         
@@ -355,9 +366,9 @@ def main():
                 logging.warning(f"{i['name']} not downloaded. Status is {i['status']}")
         
 
-        # Block until all async processes complete. Retrieve md5sum from completed background processes
-        md5sumfilename=filename('MD5',args.pgid,today, actual_bclrun_name,'txt')
-        with open(md5sumfilename, 'wt') as fh:
+        # Block until all async processes complete. Retrieve md5sum and write out from completed background processes
+        md5sumfilename=filename('MD5',args.pgid,today, 'txt')
+        with open(md5sumfilename, 'at') as fh:
             for i in range(len(job_list)):
                 #fastqc_jobs[i].get()
                 fh.write(job_list[i].get().stdout.decode('UTF-8'))
@@ -365,45 +376,42 @@ def main():
         logging.info(f"md5sum written to {md5sumfilename}")
         
 
-    
-        # Upload md5sum
-        #Refresh upload credentials
-        base_fol_response = ICA_SDK.FoldersApi(api_client).update_folder(base_fol_response.id, 
-                                                                    include='ObjectStoreAccess', 
-                                                                    body=ICA_SDK.FolderUpdateRequest())
-        #Upload md5sum file
-        upload_file(md5sumfilename, base_fol_response)
-            
-        # Close upload session
-        ICA_SDK.FoldersApi(api_client).complete_folder_session(base_fol_response.id, 
-                                              base_fol_response.object_store_access.session_id, 
-                                              ICA_SDK.CompleteSessionRequest(1) )
-        # Upload meta.tsv
-        metafilename=filename('meta',args.pgid,today, actual_bclrun_name,'tsv')
-        fastq_names=sorted([i['name'] for i in fastq_dict])
-        
+        # Write meta.tsv        
+        fastq_names=sorted([i['name'] for i in fastq_dict])        
         sample_id=set()
-        with open(metafilename, 'wt') as fh:
-            fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
+        with open(metafilename, 'at') as fh:            
             for i in fastq_names:
                 mg=re.match('(.{2}-.{2}-.{4}-.{1}-.{2}-.{1})-(.{9})_(.{6}_.{4}(.{4})_.{3})_S\d+_L00(\d)_(R1|R2)',i)
                 fh.write('\t'.join((i,)+mg.groups())+'\n')    
                 sample_id.add(mg.group(1))
-        upload_file(metafilename, base_fol_response)
+
         
-        # Upload complete_list.tsv
-        completelistfilename=filename('complete_list',args.pgid,today, actual_bclrun_name,'tsv')
-        sample_id_list=sorted(list(sample_id))
-        
-        with open(completelistfilename, 'wt') as fh:
-            fh.write('\t'.join(['id','sample_id','complete','folder_name\n']))
-            for i in sample_id_list:
-                
+        # Write complete_list.tsv
+
+        sample_id_list=sorted(list(sample_id))        
+        with open(completelistfilename, 'at') as fh:            
+            for i in sample_id_list:                
                 fh.write('\t'.join([i, i, 'Done',f'{today}_report'])+'\n')    
-        upload_file(completelistfilename, base_fol_response)
+
         
     pool.close()
     pool.join()
+    #%% Upload text files
+    #Refresh upload credentials
+    base_fol_response = ICA_SDK.FoldersApi(api_client).update_folder(base_fol_response.id, 
+                                                                include='ObjectStoreAccess', 
+                                                                body=ICA_SDK.FolderUpdateRequest())
+
+    
+        
+
+    upload_file(md5sumfilename, base_fol_response)
+    upload_file(metafilename, base_fol_response)
+    upload_file(completelistfilename, base_fol_response)
+    # Close upload session
+    ICA_SDK.FoldersApi(api_client).complete_folder_session(base_fol_response.id, 
+                                          base_fol_response.object_store_access.session_id, 
+                                          ICA_SDK.CompleteSessionRequest(1) )
                 
     #%% Upload FastQC results
     #Create fastqc folder
