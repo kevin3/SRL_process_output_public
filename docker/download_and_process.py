@@ -16,7 +16,9 @@ from datetime import datetime
 import logging
 import sys
 import urllib
-
+from collections import namedtuple
+from time import sleep
+#%%
 logging.basicConfig(
 level=logging.INFO,
 format="%(asctime)s %(processName)s %(levelname)s %(message)s",
@@ -120,8 +122,9 @@ def upload_file(file_name: str, fold_api_response):
     cred=fold_api_response.object_store_access.aws_s3_temporary_upload_credentials
     object_name=os.path.basename(file_name)
     s3_client=get_s3_client(cred)
-    s3_client.upload_file(file_name, cred.bucket_name, cred.key_prefix+object_name)
+    response=s3_client.upload_file(file_name, cred.bucket_name, cred.key_prefix+object_name)
     logging.info(f"{file_name} uploaded to gds://{fold_api_response.volume_name}{fold_api_response.path}")
+    return response
 
 def run_fastqc(fastqfile):
     response=subprocess.run(['/opt/bin/FastQC/fastqc','-q','-o','fastqc', fastqfile],  capture_output =True)
@@ -155,7 +158,7 @@ def main():
     	# parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "~/.ica/apj-config.yaml")
     	#parser.add_argument("--ica-config", dest="config", required=False, help="ica config file indicating server,domain, and region", default = "opt/resources/apj-config.yaml")
     parser.add_argument("--project-name", dest="project_name", required=True, help="ica project name specified in sample sheet that contains FASTQ files and new output folder", default ="japaninstrumenttest")
-    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather",  nargs='+')
+    parser.add_argument("--run-id", dest="run_id", required=True, help="Run ID to gather")
     parser.add_argument("--api-key", dest="api_key", required=True, help="ICA API Key, surround with single quotes")
     parser.add_argument("--ica-domain", dest="ica_domain", required=False, help="ICA domain", default = "ilmn-prod-apjdev")
     parser.add_argument("--ica-server", dest="ica_server", required=False, help="ICA server", default = "https://aps2.platform.illumina.com")
@@ -163,18 +166,22 @@ def main():
     parser.add_argument("--workgroup", dest="workgroup", required=True, help="Workgroup in BSSH")
     parser.add_argument("--runfastqc", dest="runfastqc", required=False, help="Specify 'true' or 'false' on whether to run fastqc",  
                         default='false', choices=['true','false'])
-    # parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
-    #                     default='false', choices=['true','false'])
-    # args = parser.parse_args(['--project-name','japaninstrumenttest',
-    #                     '--run-id','211105_M02021_0243_123456789', '211117_M02021_0245_123456789',
-    #                     '--api-key','7$dD5pkEgY1C5($$KcO__',
-    #                     '--pgid', 'PG3001',
-    # 						'--ica-server', 'https://apn1.platform.illumina.com',
-    # 						'--ica-domain', 'ilmn-prod-apjdev',
-    #                     '--workgroup', 'japaninstrumenttest'])
+    parser.add_argument("--uniquetsv", dest="uniquetsv", required=False, help="Specify 'true' or 'false' on whether to include run id into tsv file names",  
+                        default='true', choices=['true','false'])
+    args = parser.parse_args(['--project-name','japaninstrumenttest',
+                        '--run-id','211105_M02021_0243_123456789, 211117_M02021_0245_123456789',
+                        '--api-key','cWdeSSBqrbmS*URdS$Bt6R',
+                        '--pgid', 'PG3003',
+    						'--ica-server', 'https://apn1.platform.illumina.com',
+    						'--ica-domain', 'ilmn-prod-apjdev',
+                        '--workgroup', 'japaninstrumenttest'])
     
-    args = parser.parse_args()
-    print(args.api_key)
+    #args = parser.parse_args()
+    args.run_id=args.run_id.split(',')
+    #Remove any trailing or leading whitespaces
+    for i in range(len(args.run_id)):
+        args.run_id[i]=args.run_id[i].strip()
+    
     today=datetime.today().strftime('%y%m%d')
     
     p=urllib.parse.urlparse(args.ica_server, 'https')
@@ -239,6 +246,8 @@ def main():
                                                                    path=["/runs/*"], 
                                                                    page_size=100, 
                                                                    recursive=False).to_dict()['items']
+    Jobs=namedtuple("Jobs", "fol_id job_id")
+    fastq_copy_jobs=[]
     
     for run_id in args.run_id:
 
@@ -258,9 +267,13 @@ def main():
         #Copy fastqs to destination folder
         fastq_parent_folder_ids=set([i['parent_folder_id'] for i in fastq_dict])
         for folder_id in fastq_parent_folder_ids:
-            ICA_SDK.FoldersApi(api_client).copy_folder(folder_id, 
+            copyresponse=ICA_SDK.FoldersApi(api_client).copy_folder(folder_id, 
                                                        ICA_SDK.FolderCopyRequest(target_parent_folder_id=base_fol_response.id, 
                                                                                  destination_folder_name='sequence'))
+            fol_id=re.search('folder:(fol.[a-zA-Z0-9]{32})#', copyresponse.parent_folder_urn).group(1)
+            job_id=copyresponse.id
+            
+            fastq_copy_jobs.append(Jobs(fol_id, job_id))
         logging.info(f'Fastq files copy for {run_id} initiated')
     #%% Copy run data to destination folder
     #%
@@ -268,6 +281,8 @@ def main():
     runfolder_dict=ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[bsshvolume], 
                                                 path=['/Runs/*'], 
                                                 recursive=False, page_size=10000).to_dict()['items']
+    
+    run_copy_jobs=[]
     #Copy run folder in loop
     for run_id in args.run_id:
         bclrun_name=search_name(runfolder_dict, run_id)
@@ -286,8 +301,14 @@ def main():
                                                                recursive=True, page_size=10000).to_dict()['items'][0]['id']
     
         #Copy to destination
-        ICA_SDK.FoldersApi(api_client).copy_folder(interop_id,
+        copyresponse=ICA_SDK.FoldersApi(api_client).copy_folder(interop_id,
                                                    ICA_SDK.FolderCopyRequest(target_parent_folder_id=run_fol_response.id))
+        
+        fol_id=re.search('folder:(fol.[a-zA-Z0-9]{32})#', copyresponse.parent_folder_urn).group(1)
+        job_id=copyresponse.id
+        
+        run_copy_jobs.append(Jobs(fol_id, job_id))
+        
         logging.info(f'InterOp folder copy for {run_id} initiated')
         
         #% Copy individual sav files to destination
@@ -401,6 +422,31 @@ def main():
                                           fastqc_fol_response.object_store_access.session_id, 
                                           ICA_SDK.CompleteSessionRequest(len(filelist)) )
     
+    #%% Check copying have completed
+    logging.info("Checking fastq files copy jobs")
+    for job in fastq_copy_jobs:
+        
+        job_query_response = ICA_SDK.FoldersApi(api_client).get_folder_job(job.fol_id, job.job_id)
+        logging.info(f"Copying for {job.fol_id},  {job.job_id} is {job_query_response.progress_status}")
+        while job_query_response.progress_status!='Completed':
+            logging.info("Waiting for 10 seconds")
+            sleep(10)
+        else:
+            logging.info(f"Copying for {job.fol_id},  {job.job_id} is {job_query_response.progress_status}")
+    
+    logging.info("Checking run interop files copy jobs")
+    
+    for job in run_copy_jobs:
+        
+        job_query_response = ICA_SDK.FoldersApi(api_client).get_folder_job(job.fol_id, job.job_id)
+        logging.info(f"Copying for {job.fol_id},  {job.job_id} is {job_query_response.progress_status}")
+        while job_query_response.progress_status!='Completed':
+            logging.info("Waiting for 10 seconds")
+            sleep(10)
+        else:
+            logging.info(f"Copying for {job.fol_id},  {job.job_id} is {job_query_response.progress_status}")
+            
+
     #%% Generate and upload report_file_list.txt
     #Get all file paths in destination folder
     allfiles_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[args.project_name], 
