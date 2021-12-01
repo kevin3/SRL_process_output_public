@@ -115,8 +115,8 @@ def filename(s, pgid, today, ext):
 #%%
 def download_file(i : dict):
     cmd_args=['curl','-s', i['presigned_url'], '--output', i['name']]        
-    response=subprocess.run(cmd_args)
-    logging.info(f"Downloading {i['name']} returned with exit code {response.returncode}")
+    response=subprocess.run(cmd_args, capture_output =True)
+    logging.info(f"Downloading {i['name']} returned with exit code {response.returncode} with stderr: {response.stderr.decode('UTF-8')}")
     
 def upload_file(file_name: str, fold_api_response):
     cred=fold_api_response.object_store_access.aws_s3_temporary_upload_credentials
@@ -392,6 +392,12 @@ def main():
         with open(completelistfilename, 'at') as fh:            
             for i in sample_id_list:                
                 fh.write('\t'.join([i, i, 'Done',f'{today}_report'])+'\n')    
+        
+        # Delete fastqs
+        to_delete=glob("./*.fastq.gz")
+        for i in to_delete:
+            os.remove(i)
+            logging.info(f"Deleting {i} from current working directory")
 
         
     pool.close()
@@ -489,10 +495,7 @@ def main():
     #Revert acl
     ICA_SDK.FoldersApi(api_client).update_folder(bsshvolume_id, body=ICA_SDK.FolderUpdateRequest(acl=old_acl))
     logging.info(f"{bsshvolume} folder acl reverted")
-    to_delete=glob("./*.fastq.gz")
-    for i in to_delete:
-        os.remove(i)
-        logging.info(f"Deleting {i} from current working directory")
+
     
     logging.info("All complete!")
     
