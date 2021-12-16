@@ -445,6 +445,7 @@ def main():
         while job_query_response.progress_status!='Completed':
             logging.info("Waiting for 10 seconds")
             sleep(10)
+            job_query_response = ICA_SDK.FoldersApi(api_client).get_folder_job(job.fol_id, job.job_id)
         else:
             logging.info(f"Copying for {job.fol_id},  {job.job_id} is {job_query_response.progress_status}")
     
