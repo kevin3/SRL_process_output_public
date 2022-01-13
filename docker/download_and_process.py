@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Oct 26 12:26:49 2021
-
+Updated kcutler
 @author: jsia1
 """
 import ICA_SDK
@@ -237,7 +237,6 @@ def main():
                                                                    recursive=False).to_dict()['items']
     
     samplerun=search_name(folder_dict, args.run_id)
-    
     #Get list of fastqs
     fastq_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[samplevolume], 
                                               path=[f'/runs/{samplerun}/*'], 
@@ -245,14 +244,23 @@ def main():
                                               page_size=1000, 
                                               include='PresignedUrl').to_dict()['items']
     
+    
     #Create destination folder
     base_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/",
                   foldername=args.pgid,
                   volume_name=args.project_name,
                   api_client=api_client)
 
-    
     #Copy fastqs to destination folder
+    fastq_list=list([i['name'] for i in fastq_dict])
+    fastq_set=set([i['name'] for i in fastq_dict])
+    if len(fastq_list) != len(fastq_set):
+        fastq_path_list=list([i['path'] for i in fastq_dict])
+        print(fastq_path_list)
+        raise Exception("Multiple FASTQ Analysis detected")
+    else:
+        print("Single FASTQ Analysis Folder")
+ 
     fastq_parent_folder_ids=set([i['parent_folder_id'] for i in fastq_dict])
     for folder_id in fastq_parent_folder_ids:
         ICA_SDK.FoldersApi(api_client).copy_folder(folder_id, 
@@ -268,7 +276,7 @@ def main():
     #Search for full run folder name
     
     bclrun_name=search_name(runfolder_dict, args.run_id)
-    actual_bclrun_name=re.match('(.{6}_.{6}_.{4}_.{9})', bclrun_name).group(1)
+    actual_bclrun_name=re.match('(.{6}_.{7}_.{1}_.{9})', bclrun_name).group(1)
     
     #%%
     #% Create destination folder
