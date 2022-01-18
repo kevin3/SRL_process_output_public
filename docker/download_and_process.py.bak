@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Oct 26 12:26:49 2021
-Updated kcutler
+
 @author: jsia1
 """
 import ICA_SDK
@@ -170,7 +170,7 @@ def main():
                         default='false', choices=['true','false'])
     # args = parser.parse_args(['--project-name','japaninstrumenttest',
     #                     '--run-id','211105_M02021_0243',
-    #                     '--api-key','<apikey>',
+    #                     '--api-key','K9qVNH^a2*T6vfF^n%SvyC',
     #                     '--pgid', 'PG1001',
     # 						'--ica-server', 'https://apn1.platform.illumina.com',
     # 						'--ica-domain', 'ilmn-prod-apjdev',
@@ -237,6 +237,7 @@ def main():
                                                                    recursive=False).to_dict()['items']
     
     samplerun=search_name(folder_dict, args.run_id)
+    
     #Get list of fastqs
     fastq_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[samplevolume], 
                                               path=[f'/runs/{samplerun}/*'], 
@@ -244,23 +245,14 @@ def main():
                                               page_size=1000, 
                                               include='PresignedUrl').to_dict()['items']
     
-    
     #Create destination folder
     base_fol_response=create_folder(folder_path=f"/{args.pgid}/{today}_report/",
                   foldername=args.pgid,
                   volume_name=args.project_name,
                   api_client=api_client)
 
+    
     #Copy fastqs to destination folder
-    fastq_list=list([i['name'] for i in fastq_dict])
-    fastq_set=set([i['name'] for i in fastq_dict])
-    if len(fastq_list) != len(fastq_set):
-        fastq_path_list=list([i['path'] for i in fastq_dict])
-        logging.warning(fastq_path_list)
-        raise Exception("Multiple FASTQ Analysis detected")
-    else:
-        logging.info("Single FASTQ Analysis Folder")
- 
     fastq_parent_folder_ids=set([i['parent_folder_id'] for i in fastq_dict])
     for folder_id in fastq_parent_folder_ids:
         ICA_SDK.FoldersApi(api_client).copy_folder(folder_id, 
@@ -357,7 +349,6 @@ def main():
     with open(metafilename, 'wt') as fh:
         fh.write('\t'.join(['fastq_name','id','flowcell_id','lib_id','index_id','lane','strand\n']))
         for i in fastq_names:
-            logging.info(i)
             mg=re.match('(.{2}-.{2}-.{4}-.{1}-.{2}-.{1})-(.{9})_(.{6}_.{4}(.{4})_.{3})_S\d+_L00(\d)_(R1|R2)',i)
             fh.write('\t'.join((i,)+mg.groups())+'\n')    
             sample_id.add(mg.group(1))
@@ -392,41 +383,15 @@ def main():
                                           ICA_SDK.CompleteSessionRequest(len(filelist)) )
     
     #%% Generate and upload report_file_list.txt
-    allfiles_response=ICA_SDK.FilesApi(api_client).list_files(volume_name=[args.project_name], 
+    #Get all file paths in destination folder
+    allfiles_dict=ICA_SDK.FilesApi(api_client).list_files(volume_name=[args.project_name], 
                                                           path=[f"/{args.pgid}/{today}_report/*"], 
                                           recursive=True, 
-                                          page_size=10000,
-                                          include='TotalItemCount')
-
-    allfiles_dict = allfiles_response.to_dict()['items']
-    allfiles_count= allfiles_response.to_dict()['total_item_count']
-    allfiles_endtoken = allfiles_response.to_dict()['last_page_token']
-    logging.info("Initial endtoken = "+str(allfiles_endtoken))
-    allfiles_nextpagetoken = allfiles_response.to_dict()['next_page_token']
-    logging.info("Initial next_page_token = "+str(allfiles_nextpagetoken))
-
-    if int(allfiles_count) <= 10000:
-        logging.info("Total File Number < 10000 " + str(allfiles_count))
-        allfiles_paths=sorted([i['path'] for i in allfiles_dict])
-        with open(f'{today}_report_file_list.txt' ,'wt') as fh:
-            fh.write('\n'.join(allfiles_paths))
-    else:
-        while allfiles_nextpagetoken != "None":
-            allfiles_response_n=ICA_SDK.FilesApi(api_client).list_files(volume_name=[args.project_name], 
-                                                              path=[f"/{args.pgid}/{today}_report/*"], 
-                                              recursive=True, 
-                                              page_size=10000,
-                                              include='TotalItemCount',
-                                              page_token=f"{allfiles_nextpagetoken}")
-            allfiles_dict_n = allfiles_response_n.to_dict()['items']
-            allfiles_nextpagetoken = allfiles_response_n.to_dict()['next_page_token']
-            allfiles_dict.extend(allfiles_dict_n)
-            if allfiles_nextpagetoken == None:
-                break
-
-        allfiles_paths=sorted([i['path'] for i in allfiles_dict])
-        with open(f'{today}_report_file_list.txt' ,'wt') as fh:
-            fh.write('\n'.join(allfiles_paths))
+                                          page_size=10000).to_dict()['items']
+    #Sort and write all paths to text file
+    allfiles_paths=sorted([i['path'] for i in allfiles_dict])
+    with open(f'{today}_report_file_list.txt' ,'wt') as fh:
+        fh.write('\n'.join(allfiles_paths))
 
     #Get destination folder info
     parent_fold_id = ICA_SDK.FoldersApi(api_client).list_folders(volume_name=[args.project_name], 
